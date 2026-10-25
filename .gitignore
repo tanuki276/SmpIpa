@@ -8,6 +8,8 @@ SanpoRoad.xcodeproj/
 
 # Build output
 build/
+build-tests/
+*.xcresult/
 Payload/
 *.ipa
 

@@ -125,11 +125,24 @@ private struct WalkResultEditor: View {
     }
 
     private func save() {
+        var createdPhoto: String?
         do {
-            route.name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000)); route.note = String(note.prefix(10_000))
-            route.tags = tagsText.split(whereSeparator: { $0 == "," || $0 == "、" || $0.isNewline }).map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30)) }.filter { !$0.isEmpty }.prefix(20).map { $0 }
-            if let photoData { route.photoPath = try PhotoStore.shared.save(data: photoData, routeID: route.id); route.photoHash = PhotoStore.shared.hash(path: route.photoPath); route.photoRemoved = false }
-            try onSave(route); dismiss()
-        } catch { self.error = error.localizedDescription }
+            var saved = route
+            saved.name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+            saved.note = String(note.prefix(10_000))
+            saved.tags = tagsText.split(whereSeparator: { $0 == "," || $0 == "、" || $0.isNewline }).map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30)) }.filter { !$0.isEmpty }.prefix(20).map { $0 }
+            if let photoData {
+                let path = try PhotoStore.shared.save(data: photoData, routeID: saved.id)
+                createdPhoto = path
+                saved.photoPath = path
+                saved.photoHash = PhotoStore.shared.hash(path: path)
+                saved.photoRemoved = false
+            }
+            try onSave(saved)
+            dismiss()
+        } catch {
+            PhotoStore.shared.remove(path: createdPhoto)
+            self.error = error.localizedDescription
+        }
     }
 }
