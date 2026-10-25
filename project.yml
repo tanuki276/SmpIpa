@@ -26,6 +26,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tanuki276.sanporoad
         PRODUCT_NAME: サンポロード
+        PRODUCT_MODULE_NAME: SanpoRoad
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: SanpoRoad/SanpoRoad.entitlements
@@ -33,3 +34,22 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         CURRENT_PROJECT_VERSION: 2
         MARKETING_VERSION: 1.0.0
+  SanpoRoadTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: SanpoRoadTests
+    dependencies:
+      - target: SanpoRoad
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  SanpoRoad:
+    build:
+      targets:
+        SanpoRoad: all
+        SanpoRoadTests: [test]
+    test:
+      targets:
+        - SanpoRoadTests

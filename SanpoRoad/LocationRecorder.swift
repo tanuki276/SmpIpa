@@ -18,6 +18,7 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
     @Published var referenceRoute: SavedRoute?
 
     private let manager = CLLocationManager()
+    private let sessionStore: LiveSessionStore
     private var segment = 0
     private var restIntervals: [RestInterval] = []
     private var pauseStartedMs: Int64?
@@ -32,7 +33,10 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
     private var pendingHighAccuracy: Bool?
     private var restoredSourceRouteId: Int64?
 
-    override init() {
+    override convenience init() { self.init(sessionStore: .shared) }
+
+    init(sessionStore: LiveSessionStore) {
+        self.sessionStore = sessionStore
         super.init()
         manager.delegate = self
         manager.activityType = .fitness
@@ -62,7 +66,7 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
     }
 
     func start(highAccuracy: Bool) {
-        guard pendingRoute == nil else { return }
+        guard !isRecording, pendingRoute == nil else { return }
         applyHighAccuracy(highAccuracy)
         if authorizationStatus == .notDetermined { pendingHighAccuracy = highAccuracy; requestPermission(); return }
         guard authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways else { return }
@@ -93,14 +97,15 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
         manager.startUpdatingLocation(); persistLiveIfNeeded(); updateRecordingNotification()
     }
 
-    func discard() { stopUpdatesOnly(); LiveSessionStore.shared.clearLive(); resetSession() }
-    func clearPending() { pendingRoute = nil; LiveSessionStore.shared.clearPending() }
+    func discard() { stopUpdatesOnly(); sessionStore.clearLive(); resetSession() }
+    func clearPending() { pendingRoute = nil; sessionStore.clearPending() }
 
     func stop(name: String = "散歩", note: String = "", tags: [String] = [], sourceRouteId: Int64? = nil) -> SavedRoute? {
         guard isRecording, let startedAtMs else { return pendingRoute }
         let now = Date().epochMilliseconds
-        if let pauseStartedMs { restIntervals.append(RestInterval(startMs: pauseStartedMs, endMs: now)) }
-        let rest = restIntervals.reduce(Int64(0)) { $0 + $1.durationMs }
+        var completedRests = restIntervals
+        if let pauseStartedMs { completedRests.append(RestInterval(startMs: pauseStartedMs, endMs: now)) }
+        let rest = completedRests.reduce(Int64(0)) { $0 + $1.durationMs }
         let active = max(0, now - startedAtMs - rest)
         let sortedAccuracy = acceptedAccuracies.sorted()
         let median: Double? = sortedAccuracy.isEmpty ? nil : sortedAccuracy[sortedAccuracy.count / 2]
@@ -110,10 +115,15 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
         let route = SavedRoute(id: max(1, startedAtMs), name: name.isEmpty ? "散歩" : name, startedAt: startedAtMs,
             durationMs: active, distanceMeters: distanceMeters, points: points, note: note,
             sourceRouteId: sourceRouteId ?? referenceRoute?.id ?? restoredSourceRouteId, restDurationMs: rest, tags: tags,
-            gpsQuality: quality, restIntervals: restIntervals)
-        do { try LiveSessionStore.shared.savePending(route); pendingRoute = route; recoveryError = nil }
-        catch { recoveryError = "保存待ちの散歩を保持できませんでした。空き容量を確認してください。" }
-        stopUpdatesOnly(); LiveSessionStore.shared.clearLive(); resetSession(keepReference: false)
+            gpsQuality: quality, restIntervals: completedRests)
+        do { try sessionStore.savePending(route); pendingRoute = route; recoveryError = nil }
+        catch {
+            // Keep both the live checkpoint and in-memory track until a retry succeeds.
+            pause()
+            recoveryError = "保存待ちの散歩を保持できませんでした。記録は一時停止しています。空き容量を確認して、もう一度終了してください。"
+            return nil
+        }
+        stopUpdatesOnly(); sessionStore.clearLive(); resetSession(keepReference: false)
         return route
     }
 
@@ -168,9 +178,9 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
     }
 
     private func restorePendingAndLiveSession() {
-        do { pendingRoute = try LiveSessionStore.shared.loadPending() } catch { recoveryError = error.localizedDescription }
+        do { pendingRoute = try sessionStore.loadPending() } catch { recoveryError = error.localizedDescription }
         do {
-            guard pendingRoute == nil, let snap = try LiveSessionStore.shared.loadLive() else { return }
+            guard pendingRoute == nil, let snap = try sessionStore.loadLive() else { return }
             applyHighAccuracy(snap.highAccuracy ?? false)
             startedAtMs = snap.startedAtMs; isRecording = true; isPaused = snap.isPaused; pauseStartedMs = snap.pauseStartedMs
             segment = snap.segment; points = snap.points; distanceMeters = snap.distanceMeters; restIntervals = snap.restIntervals
@@ -194,8 +204,8 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
             excludedPoints: excludedPoints, rawDistanceMeters: rawDistanceMeters, observedDurationMs: observedDurationMs,
             lowAccuracyDurationMs: lowAccuracyDurationMs, latestAccuracy: latestAccuracy,
             sourceRouteId: referenceRoute?.id ?? restoredSourceRouteId, highAccuracy: highAccuracy)
-        do { try LiveSessionStore.shared.saveLive(snapshot); recoveryError = nil }
-        catch { recoveryError = "GPS記録の保存に失敗しました。空き容量を確認してください。"; isPaused = true; pauseStartedMs = Date().epochMilliseconds; manager.stopUpdatingLocation(); updateRecordingNotification() }
+        do { try sessionStore.saveLive(snapshot); recoveryError = nil }
+        catch { recoveryError = "GPS記録の保存に失敗しました。空き容量を確認してください。"; isPaused = true; pauseStartedMs = pauseStartedMs ?? Date().epochMilliseconds; manager.stopUpdatingLocation(); updateRecordingNotification() }
     }
 
     private func stopUpdatesOnly() {

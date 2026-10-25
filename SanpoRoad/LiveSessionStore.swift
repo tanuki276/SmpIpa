@@ -20,8 +20,12 @@ struct LiveSessionSnapshot: Codable {
 struct LiveSessionStore {
     static let shared = LiveSessionStore()
     private let fm = FileManager.default
+    private let directoryOverride: URL?
+
+    init(directory: URL? = nil) { directoryOverride = directory }
 
     private var directory: URL {
+        if let directoryOverride { return directoryOverride }
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("SanpoRoad", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)

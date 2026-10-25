@@ -200,3 +200,61 @@ func formatPace(_ value: Double?) -> String {
     let min = Int(value), sec = Int((value - Double(min)) * 60)
     return String(format: "%d:%02d /km", min, sec)
 }
+
+// Match Android defaults when older backups omit fields; required fields stay strict.
+extension LatLngPoint {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        lat = try values.decode(Double.self, forKey: .lat)
+        lng = try values.decode(Double.self, forKey: .lng)
+        timeMs = try values.decode(Int64.self, forKey: .timeMs)
+        segment = try values.decodeIfPresent(Int.self, forKey: .segment) ?? 0
+        accuracyM = try values.decodeIfPresent(Double.self, forKey: .accuracyM)
+    }
+}
+
+// Match Android defaults when older backups omit fields; required fields stay strict.
+extension SavedRoute {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(Int64.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        startedAt = try values.decode(Int64.self, forKey: .startedAt)
+        durationMs = try values.decode(Int64.self, forKey: .durationMs)
+        distanceMeters = try values.decode(Double.self, forKey: .distanceMeters)
+        points = try values.decode([LatLngPoint].self, forKey: .points)
+        note = try values.decodeIfPresent(String.self, forKey: .note) ?? ""
+        updatedAt = try values.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0
+        favorite = try values.decodeIfPresent(Bool.self, forKey: .favorite) ?? false
+        photoRemoved = try values.decodeIfPresent(Bool.self, forKey: .photoRemoved) ?? false
+        syncState = try values.decodeIfPresent(String.self, forKey: .syncState) ?? "PENDING"
+        restDurationMs = try values.decodeIfPresent(Int64.self, forKey: .restDurationMs) ?? 0
+        formatVersion = try values.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 2
+        tags = try values.decodeIfPresent([String].self, forKey: .tags) ?? []
+        imported = try values.decodeIfPresent(Bool.self, forKey: .imported) ?? false
+        restIntervals = try values.decodeIfPresent([RestInterval].self, forKey: .restIntervals) ?? []
+        photoPath = try values.decodeIfPresent(String.self, forKey: .photoPath)
+        photoObjectPath = try values.decodeIfPresent(String.self, forKey: .photoObjectPath)
+        ownerId = try values.decodeIfPresent(String.self, forKey: .ownerId)
+        deletedAt = try values.decodeIfPresent(Int64.self, forKey: .deletedAt)
+        photoHash = try values.decodeIfPresent(String.self, forKey: .photoHash)
+        syncedPhotoHash = try values.decodeIfPresent(String.self, forKey: .syncedPhotoHash)
+        sourceRouteId = try values.decodeIfPresent(Int64.self, forKey: .sourceRouteId)
+        importKey = try values.decodeIfPresent(String.self, forKey: .importKey)
+        gpsQuality = try values.decodeIfPresent(GpsQualityReport.self, forKey: .gpsQuality)
+    }
+}
+
+// Match Android defaults when older backups omit fields; required fields stay strict.
+extension GpsQualityReport {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        acceptedPoints = try values.decodeIfPresent(Int.self, forKey: .acceptedPoints) ?? 0
+        excludedPoints = try values.decodeIfPresent(Int.self, forKey: .excludedPoints) ?? 0
+        lowAccuracyDurationMs = try values.decodeIfPresent(Int64.self, forKey: .lowAccuracyDurationMs) ?? 0
+        observedDurationMs = try values.decodeIfPresent(Int64.self, forKey: .observedDurationMs) ?? 0
+        rawDistanceMeters = try values.decodeIfPresent(Double.self, forKey: .rawDistanceMeters) ?? 0
+        filteredDistanceMeters = try values.decodeIfPresent(Double.self, forKey: .filteredDistanceMeters) ?? 0
+        medianAccuracyM = try values.decodeIfPresent(Double.self, forKey: .medianAccuracyM)
+    }
+}

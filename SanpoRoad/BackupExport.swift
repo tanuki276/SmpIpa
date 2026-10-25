@@ -13,6 +13,16 @@ struct SanpoBackup: Codable {
     var photos: [BackupPhoto] = []
 }
 
+extension SanpoBackup {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? "SANPO-ROAD"
+        version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        routes = try values.decode([SavedRoute].self, forKey: .routes)
+        photos = try values.decodeIfPresent([BackupPhoto].self, forKey: .photos) ?? []
+    }
+}
+
 enum BackupExport {
     static let maxBytes = 50 * 1024 * 1024
 
@@ -44,7 +54,7 @@ enum BackupExport {
         guard data.count <= maxBytes else { throw AppError.message("JSONは50MBまでです") }
         let decoder = JSONDecoder()
         let backup: SanpoBackup
-        if let first = String(data: data.prefix(64), encoding: .utf8)?.drop(while: { $0.isWhitespace }).first, first == "[" {
+        if data.first(where: { ![9, 10, 13, 32].contains($0) }) == 91 {
             backup = SanpoBackup(routes: try decoder.decode([SavedRoute].self, from: data))
         } else {
             backup = try decoder.decode(SanpoBackup.self, from: data)
@@ -53,7 +63,7 @@ enum BackupExport {
         guard backup.routes.count <= 10_000, backup.routes.reduce(Int64(0), { $0 + Int64($1.points.count) }) <= 500_000 else { throw AppError.message("記録数が多すぎます") }
         guard Set(backup.routes.map(\.id)).count == backup.routes.count else { throw AppError.message("記録IDが重複しています") }
         for route in backup.routes {
-            guard route.id > 0, route.startedAt > 0, route.formatVersion <= 2,
+            guard route.id > 0, route.startedAt > 0, route.startedAt <= Int64.max - 1_209_600_000, (1...2).contains(route.formatVersion),
                   (0...604_800_000).contains(route.durationMs), (0...604_800_000).contains(route.restDurationMs),
                   route.distanceMeters.isFinite, (0...1_000_000).contains(route.distanceMeters),
                   route.name.count <= 1000, route.note.count <= 10_000,

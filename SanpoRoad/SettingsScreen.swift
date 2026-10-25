@@ -204,7 +204,7 @@ struct SettingsScreen: View {
             guard url.startAccessingSecurityScopedResource() else { throw AppError.message("ファイルを開けませんでした") }
             defer { url.stopAccessingSecurityScopedResource() }
             let decoded = try BackupExport.decodeBackup(Data(contentsOf: url))
-            let count = store.importRoutes(decoded.routes, photos: decoded.photos, accountId: preferences.activeAccountId)
+            let count = try store.importRoutes(decoded.routes, photos: decoded.photos, accountId: preferences.activeAccountId)
             message = "\(count)件をインポートしました"
         } catch { self.error = error.localizedDescription }
     }
