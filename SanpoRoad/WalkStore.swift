@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class WalkStore: ObservableObject {
@@ -15,7 +16,9 @@ final class WalkStore: ObservableObject {
     }
 
     func delete(at offsets: IndexSet) {
-        records.remove(atOffsets: offsets)
+        for index in offsets.sorted(by: >) {
+            records.remove(at: index)
+        }
         save()
     }
 
