@@ -6,8 +6,12 @@ final class WalkStore: ObservableObject {
     @Published private(set) var records: [SavedRoute] = []
     @Published var lastError: String?
     private let fm = FileManager.default
+    private let storageOverride: URL?
+    private var persistedRecords: [SavedRoute] = []
+    private var loadFailed = false
 
     private var storageURL: URL {
+        if let storageOverride { return storageOverride }
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("SanpoRoad", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -16,7 +20,7 @@ final class WalkStore: ObservableObject {
         return dir.appendingPathComponent("routes.json")
     }
 
-    init() { load() }
+    init(storageURL: URL? = nil) { storageOverride = storageURL; load() }
 
     func visibleRecords(accountId: String?) -> [SavedRoute] {
         records.filter { $0.deletedAt == nil && ($0.ownerId == nil || $0.ownerId == accountId) }.sorted { $0.startedAt > $1.startedAt }
@@ -26,7 +30,8 @@ final class WalkStore: ObservableObject {
         records.first { $0.id == id && (ownerId == nil || $0.ownerId == ownerId) }
     }
 
-    func add(_ record: SavedRoute, accountId: String?) {
+    @discardableResult
+    func add(_ record: SavedRoute, accountId: String?) throws -> SavedRoute {
         var route = record
         route.ownerId = route.ownerId ?? accountId
         route.updatedAt = nextStamp(after: route.updatedAt)
@@ -34,7 +39,8 @@ final class WalkStore: ObservableObject {
         route.photoHash = PhotoStore.shared.hash(path: route.photoPath)
         if records.contains(where: { $0.id == route.id && $0.ownerId == route.ownerId }) { route.id = uniqueID() }
         records.append(route)
-        persist()
+        guard persist() else { throw AppError.message(lastError ?? "記録を保存できませんでした") }
+        return route
     }
 
     func update(_ record: SavedRoute) {
@@ -59,7 +65,7 @@ final class WalkStore: ObservableObject {
         records[index].updatedAt = nextStamp(after: records[index].updatedAt)
         records[index].syncState = "PENDING"
         let owned = records[index]
-        persist()
+        guard persist() else { throw AppError.message(lastError ?? "記録を保存できませんでした") }
         return owned
     }
 
@@ -75,8 +81,7 @@ final class WalkStore: ObservableObject {
             formatVersion: max(2, record.formatVersion), tags: [], imported: record.imported, importKey: record.importKey,
             gpsQuality: nil, restIntervals: []
         )
-        persist()
-        PhotoStore.shared.remove(path: oldPhoto)
+        if persist() { PhotoStore.shared.remove(path: oldPhoto) }
     }
 
     func deleteAllVisible(accountId: String?) {
@@ -85,9 +90,8 @@ final class WalkStore: ObservableObject {
 
     func eraseLocalAccount(_ accountId: String) {
         let doomed = records.filter { $0.ownerId == accountId }
-        doomed.forEach { PhotoStore.shared.remove(path: $0.photoPath) }
         records.removeAll { $0.ownerId == accountId }
-        persist()
+        if persist() { doomed.forEach { PhotoStore.shared.remove(path: $0.photoPath) } }
     }
 
     func adoptGuestRecords(accountId: String) {
@@ -137,46 +141,70 @@ final class WalkStore: ObservableObject {
         persist()
     }
 
-    func importRoutes(_ routes: [SavedRoute], photos: [String: Data], accountId: String?) -> Int {
+    func importRoutes(_ routes: [SavedRoute], photos: [String: Data], accountId: String?) throws -> Int {
         var count = 0
-        let existingKeys = Set(records.compactMap(\.importKey))
+        let originalRecords = records
+        var createdPhotos: [String] = []
+        let existingKeys = Set(records.filter { $0.ownerId == accountId }.map { BackupExport.importFingerprint($0) })
         var seen = existingKeys
-        for original in routes where original.deletedAt == nil {
-            var route = original
-            let key = route.importKey ?? BackupExport.importFingerprint(route)
-            if seen.contains(key) { continue }
-            seen.insert(key)
-            route.id = uniqueID()
-            route.ownerId = accountId
-            route.photoObjectPath = nil
-            route.updatedAt = Date().epochMilliseconds
-            route.deletedAt = nil
-            route.syncState = "PENDING"
-            route.syncedPhotoHash = nil
-            route.sourceRouteId = nil
-            route.imported = true
-            route.importKey = key
-            route.photoPath = nil
-            if let photo = photos[String(original.id)] {
-                route.photoPath = try? PhotoStore.shared.save(data: photo, routeID: route.id)
-                route.photoHash = PhotoStore.shared.hash(path: route.photoPath)
+        do {
+            for original in routes where original.deletedAt == nil {
+                var route = original
+                let key = route.importKey ?? BackupExport.importFingerprint(route)
+                if seen.contains(key) { continue }
+                seen.insert(key)
+                route.id = uniqueID()
+                route.ownerId = accountId
+                route.photoObjectPath = nil
+                route.updatedAt = Date().epochMilliseconds
+                route.deletedAt = nil
+                route.syncState = "PENDING"
+                route.syncedPhotoHash = nil
+                route.sourceRouteId = nil
+                route.imported = true
+                route.importKey = key
+                route.photoPath = nil
+                if let photo = photos[String(original.id)] {
+                    route.photoPath = try PhotoStore.shared.save(data: photo, routeID: route.id)
+                    if let path = route.photoPath { createdPhotos.append(path) }
+                    route.photoHash = PhotoStore.shared.hash(path: route.photoPath)
+                }
+                records.append(route); count += 1
             }
-            records.append(route); count += 1
+            guard persist() else { throw AppError.message(lastError ?? "記録を保存できませんでした") }
+            return count
+        } catch {
+            records = originalRecords
+            createdPhotos.forEach { PhotoStore.shared.remove(path: $0) }
+            throw error
         }
-        persist(); return count
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL) else { return }
-        do { records = try JSONDecoder().decode([SavedRoute].self, from: data) }
-        catch { lastError = "保存済み記録を読み込めませんでした: \(error.localizedDescription)" }
+        guard fm.fileExists(atPath: storageURL.path) else { return }
+        do {
+            records = try JSONDecoder().decode([SavedRoute].self, from: Data(contentsOf: storageURL))
+            persistedRecords = records
+        } catch {
+            loadFailed = true
+            lastError = "保存済み記録を読み込めませんでした。元のファイルを保護しています: \(error.localizedDescription)"
+        }
     }
 
-    func persist() {
+    @discardableResult
+    private func persist() -> Bool {
         do {
+            guard !loadFailed else { throw AppError.message("読み込めなかった記録を上書きできません。元のファイルを保護しています。") }
             let data = try JSONEncoder().encode(records)
             try data.write(to: storageURL, options: .atomic)
-        } catch { lastError = "記録を保存できませんでした: \(error.localizedDescription)" }
+            persistedRecords = records
+            lastError = nil
+            return true
+        } catch {
+            records = persistedRecords
+            lastError = "記録を保存できませんでした: \(error.localizedDescription)"
+            return false
+        }
     }
 
     private func key(_ route: SavedRoute) -> String { "\(route.ownerId ?? "guest"):\(route.id)" }

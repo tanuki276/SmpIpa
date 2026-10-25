@@ -21,6 +21,7 @@ struct WalkScreen: View {
                         if let current = recorder.currentPoint, RouteMath.distanceToRoute(current, reference.points) > 60 { MessageBanner(text: "ガイドルートから60m以上離れています") }
                     }
                     if let recovery = recorder.recoveryError { MessageBanner(text: recovery) }
+                    if let error = store.lastError { MessageBanner(text: error) }
                     liveMetrics; controls
                     if let message { MessageBanner(text: message) }
                     if recorder.isRecording { Text("画面を閉じてもiOSのバックグラウンド位置情報で記録を続けます。青い位置情報表示が出ることがあります。").font(.caption).foregroundStyle(.secondary).padding(.horizontal) }
@@ -30,8 +31,9 @@ struct WalkScreen: View {
             .toolbar { ToolbarItem(placement: .topBarTrailing) { if recorder.isRecording { Button { preferences.highAccuracyGps.toggle(); recorder.applyHighAccuracy(preferences.highAccuracyGps) } label: { Label(preferences.highAccuracyGps ? "高精度" : "通常", systemImage: preferences.highAccuracyGps ? "location.fill" : "location") } } } }
             .sheet(item: $draft) { route in
                 WalkResultEditor(route: route) { saved in
-                    store.add(saved, accountId: preferences.activeAccountId); recorder.clearPending()
-                    Task { await health.write(route: store.route(id: saved.id, ownerId: preferences.activeAccountId) ?? saved); if preferences.cloudSync { try? await cloud.sync(store: store, preferences: preferences) } }
+                    let stored = try store.add(saved, accountId: preferences.activeAccountId)
+                    recorder.clearPending()
+                    Task { await health.write(route: stored); if preferences.cloudSync { try? await cloud.sync(store: store, preferences: preferences) } }
                     draft = nil
                 } onDiscard: { recorder.clearPending(); draft = nil }
             }
@@ -63,7 +65,10 @@ struct WalkScreen: View {
     @ViewBuilder private var controls: some View {
         if !recorder.isRecording {
             VStack(spacing: 10) {
-                Button { recorder.start(highAccuracy: preferences.highAccuracyGps) } label: { Label(recorder.pendingRoute == nil ? "散歩を開始" : "保存待ち", systemImage: "figure.walk").font(.title3).frame(maxWidth: .infinity).padding(.vertical, 8) }.buttonStyle(.borderedProminent).disabled(recorder.pendingRoute != nil)
+                Button {
+                    if let pending = recorder.pendingRoute { draft = pending }
+                    else { recorder.start(highAccuracy: preferences.highAccuracyGps) }
+                } label: { Label(recorder.pendingRoute == nil ? "散歩を開始" : "保存待ちの散歩を開く", systemImage: "figure.walk").font(.title3).frame(maxWidth: .infinity).padding(.vertical, 8) }.buttonStyle(.borderedProminent)
                 if recorder.authorizationStatus == .denied || recorder.authorizationStatus == .restricted { Text("位置情報が許可されていません。iPhoneの設定からサンポロードの位置情報を許可してください。").font(.caption).foregroundStyle(.red) }
             }
         } else {
@@ -83,8 +88,9 @@ struct WalkScreen: View {
 
 private struct WalkResultEditor: View {
     @Environment(\.dismiss) private var dismiss
-    @State var route: SavedRoute
-    let onSave: (SavedRoute) -> Void
+    // This editor owns a one-time draft, retained if saving fails.
+    @State private var route: SavedRoute
+    let onSave: (SavedRoute) throws -> Void
     let onDiscard: () -> Void
     @State private var name: String
     @State private var note: String
@@ -93,7 +99,7 @@ private struct WalkResultEditor: View {
     @State private var photoData: Data?
     @State private var error: String?
 
-    init(route: SavedRoute, onSave: @escaping (SavedRoute) -> Void, onDiscard: @escaping () -> Void) {
+    init(route: SavedRoute, onSave: @escaping (SavedRoute) throws -> Void, onDiscard: @escaping () -> Void) {
         _route = State(initialValue: route); _name = State(initialValue: route.name); _note = State(initialValue: route.note); _tagsText = State(initialValue: route.tags.joined(separator: ", ")); self.onSave = onSave; self.onDiscard = onDiscard
     }
 
@@ -111,6 +117,7 @@ private struct WalkResultEditor: View {
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
             }
+            .interactiveDismissDisabled()
             .navigationTitle("散歩を保存")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("破棄", role: .destructive) { onDiscard(); dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(route.points.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } }
             .onChange(of: photoItem) { _, item in guard let item else { return }; Task { do { photoData = try await item.loadTransferable(type: Data.self) } catch { self.error = error.localizedDescription } } }
@@ -118,11 +125,24 @@ private struct WalkResultEditor: View {
     }
 
     private func save() {
+        var createdPhoto: String?
         do {
-            route.name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000)); route.note = String(note.prefix(10_000))
-            route.tags = tagsText.split(whereSeparator: { $0 == "," || $0 == "、" || $0.isNewline }).map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30)) }.filter { !$0.isEmpty }.prefix(20).map { $0 }
-            if let photoData { route.photoPath = try PhotoStore.shared.save(data: photoData, routeID: route.id); route.photoHash = PhotoStore.shared.hash(path: route.photoPath); route.photoRemoved = false }
-            onSave(route); dismiss()
-        } catch { self.error = error.localizedDescription }
+            var saved = route
+            saved.name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+            saved.note = String(note.prefix(10_000))
+            saved.tags = tagsText.split(whereSeparator: { $0 == "," || $0 == "、" || $0.isNewline }).map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30)) }.filter { !$0.isEmpty }.prefix(20).map { $0 }
+            if let photoData {
+                let path = try PhotoStore.shared.save(data: photoData, routeID: saved.id)
+                createdPhoto = path
+                saved.photoPath = path
+                saved.photoHash = PhotoStore.shared.hash(path: path)
+                saved.photoRemoved = false
+            }
+            try onSave(saved)
+            dismiss()
+        } catch {
+            PhotoStore.shared.remove(path: createdPhoto)
+            self.error = error.localizedDescription
+        }
     }
 }
