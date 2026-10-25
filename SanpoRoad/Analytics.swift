@@ -112,7 +112,7 @@ struct RouteMath {
         let strideValue = max(1, source.count / 128)
         let sampled = stride(from: 0, to: source.count, by: strideValue).map { source[$0] }
         let matched = sampled.filter { point in
-            target.contains { other in point.segment == other.segment && distance(point, other) <= threshold }
+            target.contains { other in distance(point, other) <= threshold }
         }.count
         return Double(matched) / Double(sampled.count)
     }
