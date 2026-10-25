@@ -88,7 +88,8 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
         let now = Date().epochMilliseconds
         if let pauseStartedMs { restIntervals.append(RestInterval(startMs: pauseStartedMs, endMs: now)) }
         self.pauseStartedMs = nil; isPaused = false; segment += 1
-        previousRawLocation = points.last.map { CLLocation(latitude: $0.lat, longitude: $0.lng) }
+        previousRawLocation = nil
+        lastObservationMs = nil
         manager.startUpdatingLocation(); persistLiveIfNeeded(); updateRecordingNotification()
     }
 
@@ -170,12 +171,15 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
         do { pendingRoute = try LiveSessionStore.shared.loadPending() } catch { recoveryError = error.localizedDescription }
         do {
             guard pendingRoute == nil, let snap = try LiveSessionStore.shared.loadLive() else { return }
+            applyHighAccuracy(snap.highAccuracy ?? false)
             startedAtMs = snap.startedAtMs; isRecording = true; isPaused = snap.isPaused; pauseStartedMs = snap.pauseStartedMs
             segment = snap.segment; points = snap.points; distanceMeters = snap.distanceMeters; restIntervals = snap.restIntervals
             excludedPoints = snap.excludedPoints; rawDistanceMeters = snap.rawDistanceMeters; observedDurationMs = snap.observedDurationMs
             lowAccuracyDurationMs = snap.lowAccuracyDurationMs; latestAccuracy = snap.latestAccuracy; restoredSourceRouteId = snap.sourceRouteId
             acceptedAccuracies = points.compactMap(\.accuracyM)
-            if let last = points.last { previousRawLocation = CLLocation(latitude: last.lat, longitude: last.lng); currentPoint = last }
+            if let last = points.last { currentPoint = last }
+            previousRawLocation = nil
+            lastObservationMs = nil
             if !isPaused, authorizationStatus == .authorizedWhenInUse || authorizationStatus == .authorizedAlways {
                 manager.allowsBackgroundLocationUpdates = true; manager.showsBackgroundLocationIndicator = true; manager.startUpdatingLocation()
             }
@@ -188,7 +192,8 @@ final class LocationRecorder: NSObject, ObservableObject, CLLocationManagerDeleg
         let snapshot = LiveSessionSnapshot(startedAtMs: startedAtMs, isPaused: isPaused, pauseStartedMs: pauseStartedMs,
             segment: segment, points: points, distanceMeters: distanceMeters, restIntervals: restIntervals,
             excludedPoints: excludedPoints, rawDistanceMeters: rawDistanceMeters, observedDurationMs: observedDurationMs,
-            lowAccuracyDurationMs: lowAccuracyDurationMs, latestAccuracy: latestAccuracy, sourceRouteId: referenceRoute?.id ?? restoredSourceRouteId)
+            lowAccuracyDurationMs: lowAccuracyDurationMs, latestAccuracy: latestAccuracy,
+            sourceRouteId: referenceRoute?.id ?? restoredSourceRouteId, highAccuracy: highAccuracy)
         do { try LiveSessionStore.shared.saveLive(snapshot); recoveryError = nil }
         catch { recoveryError = "GPS記録の保存に失敗しました。空き容量を確認してください。"; isPaused = true; pauseStartedMs = Date().epochMilliseconds; manager.stopUpdatingLocation(); updateRecordingNotification() }
     }
