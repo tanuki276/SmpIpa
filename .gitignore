@@ -1,0 +1,15 @@
+# Xcode
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Generated project
+SanpoRoad.xcodeproj/
+
+# Build output
+build/
+Payload/
+*.ipa
+
+# macOS
+.DS_Store
