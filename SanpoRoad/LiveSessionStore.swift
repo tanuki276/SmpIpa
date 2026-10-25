@@ -14,6 +14,7 @@ struct LiveSessionSnapshot: Codable {
     var lowAccuracyDurationMs: Int64
     var latestAccuracy: Double?
     var sourceRouteId: Int64?
+    var highAccuracy: Bool? = nil
 }
 
 struct LiveSessionStore {
