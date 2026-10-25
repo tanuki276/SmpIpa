@@ -5,14 +5,21 @@ import UIKit
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
         let stop = UNNotificationAction(identifier: "STOP_WALK", title: "散歩を終了", options: [.foreground])
-        let category = UNNotificationCategory(identifier: "SANPO_RECORDING", actions: [stop], intentIdentifiers: [])
-        UNUserNotificationCenter.current().setNotificationCategories([category])
-        UNUserNotificationCenter.current().delegate = self
+        let pause = UNNotificationAction(identifier: "PAUSE_WALK", title: "一時停止", options: [.foreground])
+        let resume = UNNotificationAction(identifier: "RESUME_WALK", title: "再開", options: [.foreground])
+        let active = UNNotificationCategory(identifier: "SANPO_RECORDING_ACTIVE", actions: [pause, stop], intentIdentifiers: [])
+        let paused = UNNotificationCategory(identifier: "SANPO_RECORDING_PAUSED", actions: [resume, stop], intentIdentifiers: [])
+        UNUserNotificationCenter.current().setNotificationCategories([active, paused]); UNUserNotificationCenter.current().delegate = self
         return true
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        if response.actionIdentifier == "STOP_WALK" { NotificationCenter.default.post(name: .sanpoStopRequested, object: nil) }
+        switch response.actionIdentifier {
+        case "STOP_WALK": NotificationCenter.default.post(name: .sanpoStopRequested, object: nil)
+        case "PAUSE_WALK": NotificationCenter.default.post(name: .sanpoPauseRequested, object: nil)
+        case "RESUME_WALK": NotificationCenter.default.post(name: .sanpoResumeRequested, object: nil)
+        default: break
+        }
     }
 }
 
@@ -26,13 +33,6 @@ struct SanpoRoadApp: App {
     @StateObject private var health = HealthKitManager()
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environmentObject(store)
-                .environmentObject(preferences)
-                .environmentObject(recorder)
-                .environmentObject(cloud)
-                .environmentObject(health)
-        }
+        WindowGroup { ContentView().environmentObject(store).environmentObject(preferences).environmentObject(recorder).environmentObject(cloud).environmentObject(health) }
     }
 }
